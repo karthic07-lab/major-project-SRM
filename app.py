@@ -1,11 +1,8 @@
 import os
 import pandas as pd
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template_string
 import joblib
 
-# -----------------------------
-# Flask initialization
-# -----------------------------
 app = Flask(__name__)
 
 # -----------------------------
@@ -47,48 +44,90 @@ FEATURE_COLUMNS = [
 ]
 
 # -----------------------------
-# Home route
+# Home
 # -----------------------------
 @app.route("/")
 def home():
     return "EV Battery Thermal Runaway Prediction API is running."
 
 # -----------------------------
-# Prediction route
+# API prediction (JSON)
 # -----------------------------
 @app.route("/predict", methods=["POST"])
 def predict():
-    try:
-        data = request.get_json(force=True)
-        if not data:
-            return jsonify({"error": "No JSON received"}), 400
+    data = request.get_json(force=True)
+    df = pd.DataFrame([data])
+    df = df.reindex(columns=FEATURE_COLUMNS, fill_value=0)
+    df_scaled = scaler.transform(df)
+    pred = model.predict(df_scaled)
+    prob = model.predict_proba(df_scaled)
 
-        df = pd.DataFrame([data])
-
-        # Ensure correct feature alignment
-        df = df.reindex(columns=FEATURE_COLUMNS, fill_value=0)
-
-        # Scale input
-        df_scaled = scaler.transform(df)
-
-        # Predict
-        prediction = model.predict(df_scaled)
-        probability = model.predict_proba(df_scaled)
-
-        return jsonify({
-            "prediction": int(prediction[0]),
-            "probability_class_0": float(probability[0][0]),
-            "probability_class_1": float(probability[0][1])
-        })
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
+    return jsonify({
+        "prediction": int(pred[0]),
+        "probability_class_0": float(prob[0][0]),
+        "probability_class_1": float(prob[0][1])
+    })
 
 # -----------------------------
-# Render PORT binding
+# Browser UI
+# -----------------------------
+@app.route("/ui", methods=["GET", "POST"])
+def ui():
+    result = None
+
+    if request.method == "POST":
+        form_data = {}
+        for col in FEATURE_COLUMNS:
+            form_data[col] = float(request.form.get(col, 0))
+
+        df = pd.DataFrame([form_data])
+        df_scaled = scaler.transform(df)
+        pred = model.predict(df_scaled)
+        prob = model.predict_proba(df_scaled)
+
+        result = {
+            "prediction": int(pred[0]),
+            "safe_prob": round(prob[0][0], 3),
+            "risk_prob": round(prob[0][1], 3)
+        }
+
+    return render_template_string("""
+    <html>
+    <head>
+        <title>EV Battery Thermal Runaway Predictor</title>
+        <style>
+            body { font-family: Arial; margin: 40px; }
+            input { width: 200px; margin-bottom: 8px; }
+            button { padding: 10px; }
+            .result { margin-top: 20px; font-size: 18px; }
+        </style>
+    </head>
+    <body>
+        <h2>EV Battery Thermal Runaway Prediction</h2>
+        <form method="post">
+            {% for col in features %}
+                <label>{{ col }}</label><br>
+                <input type="number" step="any" name="{{ col }}" required><br>
+            {% endfor %}
+            <br>
+            <button type="submit">Predict</button>
+        </form>
+
+        {% if result %}
+        <div class="result">
+            <h3>Result</h3>
+            <p><b>Prediction:</b> {{ result.prediction }}</p>
+            <p><b>Safe Probability:</b> {{ result.safe_prob }}</p>
+            <p><b>Thermal Runaway Risk Probability:</b> {{ result.risk_prob }}</p>
+        </div>
+        {% endif %}
+    </body>
+    </html>
+    """, features=FEATURE_COLUMNS, result=result)
+
+# -----------------------------
+# Run server
 # -----------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    print("Starting server on port:", port)
     app.run(host="0.0.0.0", port=port)
